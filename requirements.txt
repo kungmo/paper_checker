@@ -1,0 +1,10 @@
+chainlit
+python-dotenv
+langchain-google-genai
+langchain-core
+pypandoc
+python-docx
+lxml
+Pillow
+PyMySQL
+google-api-core
