@@ -20,142 +20,55 @@ import chainlit as cl
 from google.api_core import exceptions as google_exceptions
 
 # .env 파일이 있다면 로드
-load_dotenv()
+#load_dotenv()
 
-# LLM 모델 설정
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+# 실제 분석에 사용할 메인 모델
+MAIN_MODEL_NAME = "gemini-3-flash-preview"
+
+# API Key 검증용 가벼운 모델 (속도 우선)
+#TEST_MODEL_NAME = "gemini-3.1-flash-lite-preview"
+TEST_MODEL_NAME = "gemma-4-26b-a4b-it"
+
+async def validate_api_key(api_key: str):
+    """
+    입력받은 API Key가 유효한지 flash-lite 버전의 LLM으로 빠르게 확인합니다.
+    """
+    try:
+        # 검증용 Lite 모델 생성
+        test_llm = ChatGoogleGenerativeAI(model=TEST_MODEL_NAME, google_api_key=api_key, temperature=0)
+        # 1토큰 정도의 매우 짧은 응답을 유도하여 연결 확인
+        await test_llm.ainvoke([HumanMessage(content="Hi")])
+        return True
+    except Exception as e:
+        print(f"Google API 키가 유효하지 않습니다: {e}")
+        return False
 
 # --- 과목별 시스템 프롬프트 정의 (이미지 포함 버전) ---
 PROMPTS = {
     "국어": """
-# Role: 고등학교 국어 시험문제를 꼼꼼히 검토하는 시험문제 출제 전문가
-# 전문 분야: 현대 문학, 고전 문학, 문법, 화법과 작문
-# 주의사항: 본문과 선지 내용은 원문의 문구 그대로 사용해야만 한다.
-# 시험지 본문 내용 parsing 상태
-    1. 본문 내용 해석 시 표나 특수 기호는 일부 parsing이 되어 있다.
-    2. 그림, 사진 등 시각 자료는 텍스트와 함께 제공한다. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토하십시오.
-# To Dos:
-    1. 지문 해석, 문법적 규칙, 문학사적 사실 등에서 발생할 수 있는 사실적 오류 여부를 점검한다.
-    2. 학생이 문장을 해석할 때 의미를 오해하거나 중의적으로 해석할 수 있는 부분을 점검한다.
-    3. 문제의 질문과 선지가 명확하게 연결되는지, 논리적 비약은 없는지 확인한다.
-    4. 선지의 근거를 지문으로부터 명확하게 찾을 수 있는지 확인한다.
-    5. 오탈자나 어색한 문장이 있는 경우 반드시 알려준다.
-    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 답이 있는지, 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 답이 있는지 점검한다.
-
-# [중요] 답변 출력 형식:
-반드시 아래의 마크다운 형식을 지켜서 답변하시오. 서론이나 잡담 없이 바로 본론으로 들어가시오.
-
-## [문항별 검토]
-### 문항 1
-- **검토 결과**: [적절 / 수정 필요 / 오류]
-- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
-
-### 문항 2
-...
-
-## [주요 수정 사항 요약]
-- (반드시 고쳐야 할 부분 리스트)""",
-    "수학": """
-# Role: 고등학교 수학 시험문제를 꼼꼼히 검토하는 시험문제 출제 전문가
-# 전문 분야: 미적분, 확률과 통계, 기하, 대수
-# 주의사항: 본문과 선지 내용은 원문의 문구 그대로 사용해야만 한다.
-# 시험지 본문 내용 parsing 상태
-    1. 본문 내용 해석 시 수식과 표는 일부 parsing이 되어 있다.
-    2. 그래프, 도형 등 시각 자료는 텍스트와 함께 제공한다. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토하십시오.
-# To Dos:
-    1. 문제에 사용된 수학적 개념, 공식, 정의의 오류 여부를 점검한다.
-    2. 문제 풀이 과정에서 발생할 수 있는 논리적 오류나 계산 실수를 검토한다. (단, 직접 풀이를 제공하지는 않는다.)
-    3. 질문의 조건이 명확하고 충분한지, 해가 유일하게 결정되는지 확인한다.
-    4. 용어나 기호를 중의적으로 해석할 수 있는 경우를 점검한다.
-    5. 오탈자가 있는 경우 반드시 알려준다.
-    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 답이 있는지, 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 답이 있는지 점검한다.
-
-# [중요] 답변 출력 형식:
-반드시 아래의 마크다운 형식을 지켜서 답변하시오. 서론이나 잡담 없이 바로 본론으로 들어가시오.
-
-## [문항별 검토]
-### 문항 1
-- **검토 결과**: [적절 / 수정 필요 / 오류]
-- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
-
-### 문항 2
-...
-
-## [주요 수정 사항 요약]
-- (반드시 고쳐야 할 부분 리스트)""",
-    "영어": """
-# Role: 고등학교 영어 시험문제를 꼼꼼히 검토하는 시험문제 출제 전문가 (원어민 수준)
-# 전문 분야: 영문법, 독해, 어휘, 작문
-# 주의사항: 본문과 선지 내용은 원문의 문구 그대로 사용해야만 한다.
-# 시험지 본문 내용 parsing 상태
-    1. 본문 내용 해석 시 표나 특수 서식은 일부 parsing이 되어 있다.
-    2. 그림, 도표 등 시각 자료는 텍스트와 함께 제공한다. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토하십시오.
-# To Dos:
-    1. 문법적 오류(Grammatical errors)가 있는지 점검한다.
-    2. 어휘 선택이 부적절하거나(Inappropriate vocabulary), 문맥에 맞지 않는 단어가 사용되었는지 확인한다.
-    3. 학생이 문장을 해석할 때 의미를 오해하거나 중의적으로 해석할 수 있는 애매한(ambiguous) 표현을 점검한다.
-    4. 지문의 내용과 질문, 선지 사이의 논리적 일관성을 확인한다.
-    5. 오탈자(typo)나 구두점 오류가 있는 경우 반드시 알려준다.
-    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 답이 있는지, 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 답이 있는지 점검한다.
-
-# [중요] 답변 출력 형식:
-반드시 아래의 마크다운 형식을 지켜서 답변하시오. 서론이나 잡담 없이 바로 본론으로 들어가시오.
-
-## [문항별 검토]
-### 문항 1
-- **검토 결과**: [적절 / 수정 필요 / 오류]
-- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
-
-### 문항 2
-...
-
-## [주요 수정 사항 요약]
-- (반드시 고쳐야 할 부분 리스트)""",
-    "사회": """
-# Role: 고등학교 사회·역사 시험문제를 꼼꼼히 검토하는 시험문제 출제 전문가
-# 전문 분야: 한국사, 세계사, 정치와 법, 사회·문화, 경제
-# 주의사항: 본문과 선지 내용은 원문의 문구 그대로 사용해야만 한다.
-# 시험지 본문 내용 parsing 상태
-    1. 본문 내용 해석 시 표, 연표 등은 일부 parsing이 되어 있다.
-    2. 지도, 사진, 그래프 등 시각 자료는 텍스트와 함께 제공한다. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토하십시오.
-# To Dos:
-    1. 역사적 사실, 법률 조항, 사회 과학적 개념 등 내용상의 사실 오류(factual errors)를 점검한다.
-    2. 특정 관점에 편향되었거나 논쟁의 소지가 큰 표현이 있는지 확인한다.
-    3. 학생이 용어나 문장을 중의적으로 해석할 수 있는 부분을 점검한다.
-    4. 연도, 인물, 사건 등의 명칭에 오탈자가 있는지 확인한다.
-    5. 객관식 문제라면 선지 번호 가운데 문제에 대한 답이 있는지, 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 답이 있는지 점검한다.
-
-# [중요] 답변 출력 형식:
-반드시 아래의 마크다운 형식을 지켜서 답변하시오. 서론이나 잡담 없이 바로 본론으로 들어가시오.
-
-## [문항별 검토]
-### 문항 1
-- **검토 결과**: [적절 / 수정 필요 / 오류]
-- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
-
-### 문항 2
-...
-
-## [주요 수정 사항 요약]
-- (반드시 고쳐야 할 부분 리스트)""",
-    "과학": """
-# Role: 고등학교 과학(물리학, 화학, 생명과학, 지구과학) 시험문제를 꼼꼼히 검토하는 시험문제 출제 전문가
-# 주의사항: 본문과 선지 내용은 원문의 문구 그대로 사용해야만 한다.
-# 시험지 본문 내용 parsing 상태
-    1. 본문 내용 해석 시 수식과 표는 일부 parsing이 되어 있다.
-    2. 그림, 그래프 등 시각 자료는 텍스트와 함께 제공한다. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토하십시오.
-# To Dos:
-    1. 학생이 본문과 선지의 문장을 해석할 때 오류의 소지가 있는지 점검한다.
-    2. 선지 관련 작업
-    2-1. 문장의 의미 속에 내재된 과학적인 오류 여부를 점검한다.
-    2-2. 문장 자체에 내재된 언어학적인 오류 여부를 점검한다.
-    2-3. 용어나 문장을 중의적으로 해석할 수 있는 경우를 점검한다.
-    2-4. 객관식 문제라면 선지 번호 가운데 문제에 대한 답이 있는지, 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 답이 있는지 점검한다.
-    3. 오타가 있는 경우 반드시 알려줘야 한다.
-
-# [중요] 답변 출력 형식:
-반드시 아래의 마크다운 형식을 지켜서 답변하시오. 서론이나 잡담 없이 바로 본론으로 들어가시오.
-
+<task>국어 시험문제 내용의 꼼꼼하고 정밀한 검토</task>
+<specialty>현대 문학, 고전 문학, 문법, 화법과 작문</specialty>
+<caution>본문과 선지 내용은 원문의 문구 그대로 검토</caution>
+<parsing_status>
+    1. 표나 특수 기호는 일부만 parsing
+    2. 그림, 사진 등 시각 자료는 텍스트와 함께 제공
+    3. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토
+</parsing_status>
+<to_dos>
+    1. 지문 해석, 문법적 규칙, 문학사적 사실 등에서 발생할 수 있는 사실적 오류 여부 점검
+    2. 문장을 해석할 때 의미를 오해하거나 중의적으로 해석할 수 있는 여지를 점검
+    3. 문제의 질문과 선지가 명확하게 연결되는지, 논리적 비약은 없는지 점검
+    4. 선지의 근거를 지문으로부터 명확하게 찾을 수 있는지 점검
+    5. 오탈자나 어색한 문장 구조 점검
+    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 정답 존재 여부 점검
+    7. 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 정답 존재 여부 점검
+    8. 서술형, 논술형 문항을 포함한 모든 문항에 대하여 검토 의견 제시
+</to_dos>
+<output_instructions>
+    1. 반드시 아래의 마크다운 형식을 지켜서 답변.
+    2. 서론이나 잡담 없이 바로 본론 작성.
+</output_instructions>
+<output_example>
 ## [문항별 검토]
 ### 문항 1
 - **검토 결과**: [적절 / 수정 필요 / 오류]
@@ -166,10 +79,154 @@ PROMPTS = {
 
 ## [주요 수정 사항 요약]
 - (반드시 고쳐야 할 부분 리스트)
-"""
+</output_example>""",
+    "수학": """
+<task>수학 시험문제의 꼼꼼하고 정밀한 검토</task>
+<specialty>미적분, 확률과 통계, 기하, 대수</specialty>
+<caution>본문과 선지 내용은 원문의 문구 그대로 검토</caution>
+<parsing_status>
+    1. 표나 특수 기호는 일부만 parsing
+    2. 그림, 사진 등 시각 자료는 텍스트와 함께 제공
+    3. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토
+</parsing_status>
+<to_dos>
+    1. 문제에 사용된 수학적 개념, 공식, 정의의 오류 여부 점검
+    2. 문제 풀이 과정에서 발생할 수 있는 논리적 오류나 계산 실수를 검토 (단, 직접 풀이를 제공하지는 않음)
+    3. 질문의 조건이 명확하고 충분한지 점검
+    4. 해가 유일하게 결정되는지 점검
+    5. 용어나 기호를 중의적으로 해석할 수 있는 경우를 점검
+    6. 오탈자나 어색한 문장 구조 점검
+    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 정답 존재 여부 점검
+    7. 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 정답 존재 여부 점검
+    8. 서술형, 논술형 문항을 포함한 모든 문항에 대하여 검토 의견 제시
+</to_dos>
+<output_instructions>
+    1. 반드시 아래의 마크다운 형식을 지켜서 답변.
+    2. 서론이나 잡담 없이 바로 본론 작성.
+</output_instructions>
+<output_example>
+## [문항별 검토]
+### 문항 1
+- **검토 결과**: [적절 / 수정 필요 / 오류]
+- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
+
+### 문항 2
+...
+
+## [주요 수정 사항 요약]
+- (반드시 고쳐야 할 부분 리스트)
+</output_example>""",
+    "영어": """
+<task>영어 시험문제의 꼼꼼하고 정밀한 검토</task>
+<specialty>영문법, 독해, 어휘, 작문</specialty>
+<caution>본문과 선지 내용은 원문의 문구 그대로 검토</caution>
+<parsing_status>
+    1. 표나 특수 기호는 일부만 parsing
+    2. 그림, 사진 등 시각 자료는 텍스트와 함께 제공
+    3. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토
+</parsing_status>
+<to_dos>
+    1. 문법적 오류(Grammatical errors)가 있는지 점검
+    2. 어휘 선택이 부적절하거나(Inappropriate vocabulary), 문맥에 맞지 않는 단어가 사용되었는지 점검
+    3. 문장을 해석할 때 의미를 오해하거나 중의적으로 해석할 수 있는 애매한(ambiguous) 표현을 점검
+    4. 지문의 내용과 질문, 선지 사이의 논리적 일관성을 점검
+    5. 오탈자(typo)나 구두점 오류 점검
+    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 정답 존재 여부 점검
+    7. 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 정답 존재 여부 점검
+    8. 서술형, 논술형 문항을 포함한 모든 문항에 대하여 검토 의견 제시
+</to_dos>
+<output_instructions>
+    1. 반드시 아래의 마크다운 형식을 지켜서 답변.
+    2. 서론이나 잡담 없이 바로 본론 작성.
+</output_instructions>
+<output_example>
+## [문항별 검토]
+### 문항 1
+- **검토 결과**: [적절 / 수정 필요 / 오류]
+- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
+
+### 문항 2
+...
+
+## [주요 수정 사항 요약]
+- (반드시 고쳐야 할 부분 리스트)
+</output_example>""",
+    "사회": """
+<task>사회·윤리·역사 시험문제의 꼼꼼하고 정밀한 검토</task>
+<specialty>사회·문화, 경제, 윤리, 철학, 한국사, 세계사, 정치와 법</specialty>
+<caution>본문과 선지 내용은 원문의 문구 그대로 검토</caution>
+<parsing_status>
+    1. 표나 특수 기호는 일부만 parsing
+    2. 그림, 사진 등 시각 자료는 텍스트와 함께 제공
+    3. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토
+</parsing_status>
+<to_dos>
+    1. 법률 조항, 사회 과학적 개념, 윤리, 철학, 역사적 사실 등 내용상의 사실 오류(factual errors)를 점검
+    2. 특정 관점에 편향되었거나 논쟁의 소지가 큰 표현이 있는지 점검
+    3. 문장을 해석할 때 의미를 오해하거나 중의적으로 해석할 수 있는 여지를 점검
+    4. 연도, 인물, 사건 등의 명칭에 오탈자가 있는지 점검
+    5. 오탈자(typo)나 구두점 오류 점검
+    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 정답 존재 여부 점검
+    7. 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 정답 존재 여부 점검
+    8. 서술형, 논술형 문항을 포함한 모든 문항에 대하여 검토 의견 제시
+</to_dos>
+<output_instructions>
+    1. 반드시 아래의 마크다운 형식을 지켜서 답변.
+    2. 서론이나 잡담 없이 바로 본론 작성.
+</output_instructions>
+<output_example>
+## [문항별 검토]
+### 문항 1
+- **검토 결과**: [적절 / 수정 필요 / 오류]
+- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
+
+### 문항 2
+...
+
+## [주요 수정 사항 요약]
+- (반드시 고쳐야 할 부분 리스트)
+</output_example>""",
+    "과학": """
+<task>과학 시험문제의 꼼꼼하고 정밀한 검토</task>
+<specialty>물리학, 화학, 생명과학, 지구과학</specialty>
+<caution>본문과 선지 내용은 원문의 문구 그대로 검토</caution>
+<parsing_status>
+    1. 표나 특수 기호는 일부만 parsing
+    2. 그림, 사진 등 시각 자료는 텍스트와 함께 제공
+    3. 본문에 있는 이미지 파일명(예: 'image1.jpg')을 참고하여 해당 이미지를 함께 검토
+</parsing_status>
+<to_dos>
+    1. 문제에 사용된 과학적 개념, 공식, 정의의 오류 여부 점검
+    2. 문장의 의미 속에 내재된 과학적인 오류 여부를 점검
+    3. 문장 자체에 내재된 언어학적인 오류 여부를 점검
+    4. 과학 용어나 문장을 중의적으로 해석할 수 있는 경우를 점검
+    5. 오탈자(typo)나 구두점 오류 점검
+    6. 객관식 문제라면 선지 번호 가운데 문제에 대한 정답 존재 여부 점검
+    7. 선다형 문제라면 선지 번호 중 ㄱ, ㄴ, ㄷ을 조합하여 문제에 대한 정답 존재 여부 점검
+    8. 서술형, 논술형 문항을 포함한 모든 문항에 대하여 검토 의견 제시
+</to_dos>
+<output_instructions>
+    1. 반드시 아래의 마크다운 형식을 지켜서 답변.
+    2. 서론이나 잡담 없이 바로 본론 작성.
+</output_instructions>
+<output_example>
+## [문항별 검토]
+### 문항 1
+- **검토 결과**: [적절 / 수정 필요 / 오류]
+- **상세 내용**: (To Dos의 모든 지시사항과 관련된 내용 작성)
+- **정답 존재 여부**: [이상 없음 / 확인 필요]
+
+### 문항 2
+...
+
+## [주요 수정 사항 요약]
+- (반드시 고쳐야 할 부분 리스트)
+</output_example>""",
 }
 
 # --- DB 처리 함수 ---
+
+# --- 수정된 DB 처리 함수 (과목 컬럼 분리 버전) ---
 
 def log_usage_history(session_id, subject, is_success, error_message=None):
     """
@@ -470,9 +527,8 @@ def extract_textbox_content(textbox_element, debug=False):
     return result
 
 
-def convert_docx_to_text_with_images(file_path, debug=False):
+def convert_docx_to_text_with_images(file_path, media_dir='./extracted_media', debug=False):
     """글상자를 포함한 DOCX를 마크다운으로 변환"""
-    media_dir = './extracted_media'
     
     if not os.path.exists(file_path):
         return "파일을 찾을 수 없습니다."
@@ -726,7 +782,7 @@ def resize_existing_jpg(directory, max_width=640):
             print(f"JPG 처리 실패: {file_path.name} - {str(e)}")
 
 def encode_images_to_base64(directory):
-    """디렉토리의 모든 JPG/JPEG 파일을 Base64로 인코딩"""
+    """디렉토리의 모든 JPG/JPEG 파일을 Base64로 인코딩 (파일명 포함)"""
     directory = Path(directory)
     if not directory.exists(): return []
     encoded_data = []
@@ -735,7 +791,10 @@ def encode_images_to_base64(directory):
         try:
             with open(file_path, 'rb') as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                encoded_data.append(encoded_string)
+                encoded_data.append({
+                    "filename": file_path.name,  # ← 파일명 추가
+                    "b64": encoded_string
+                })
         except Exception as e:
             print(f"Base64 인코딩 실패: {file_path.name} - {str(e)}")
     return encoded_data
@@ -744,16 +803,52 @@ def encode_images_to_base64(directory):
 
 @cl.on_chat_start
 async def on_chat_start():
-    """앱 시작 시 과목 선택 버튼을 표시합니다."""
+    res = await cl.AskUserMessage(
+        content="안녕하세요? 학교 시험문제 검토 도우미입니다.\n시험문제 내용과 검토 결과 모두 서버에 전혀 저장하지 않도록 설계했으니 걱정 말고 마음껏 검토하세요.\n\n"
+                "**Google Gemini API 키**를 입력해주세요.\n\n"
+                "API 키도 서버에 전혀 기록하지 않습니다. 안심하고 입력하세요..\n"
+                "무료 API 키 하나당 **하루 최대 20회**까지 시험 문제 파일을 통째로 올려서 검토할 수 있습니다.\n"
+                "Google Gemini API 키는 https://aistudio.google.com/app/api-keys 에서 무료로 발급받을 수 있습니다.", 
+        timeout=600
+    ).send()
+
+    if res:
+        user_api_key = res["output"].strip()
+        
+        # 검증 중 메시지
+        msg = cl.Message(content=f"**{TEST_MODEL_NAME}** 모델로 API 키 연결 확인 중...", author="문제 검토 도우미")
+        await msg.send()
+        
+        # Lite 모델로 빠르게 검증
+        is_valid = await validate_api_key(user_api_key)
+        
+        # 수정안: 재입력 루프 없이 검증 실패 시 안내만 하고 종료
+        if is_valid:
+            cl.user_session.set("user_api_key", user_api_key)
+            msg.content = "✅ API Key가 확인되었습니다."
+            await msg.update()
+        else:
+            msg.content = "❌ 유효하지 않은 API Key입니다. 페이지를 새로고침 후 다시 시도해주세요."
+            await msg.update()
+            return
+    else:
+        # 타임아웃
+        await cl.Message(content="입력 시간이 초과되었습니다. 페이지를 새로고침 해주세요.").send()
+        return
+
+    # 2. 인사말 및 영역 선택
+    await cl.Message(content=f"분석 모델: {MAIN_MODEL_NAME}", author="문제 검토 도우미").send()
+
     actions = [
         cl.Action(name="subject_select", value=subject, label=subject, payload={"subject": subject})
         for subject in PROMPTS.keys()
     ]
     await cl.Message(
-        content="안녕하세요. 저는 학교 시험문제 검토 도우미입니다.\n검토할 과목을 선택해주세요.",
+        content="검토할 과목을 선택해주세요.",
         actions=actions,
         author="문제 검토 도우미"
     ).send()
+
 
 @cl.action_callback("subject_select")
 async def on_subject_select(action: cl.Action):
@@ -768,6 +863,18 @@ async def on_subject_select(action: cl.Action):
 
 @cl.on_message
 async def on_message(message: cl.Message):
+    # on_message 함수 내부에서
+    user_api_key = cl.user_session.get("user_api_key")
+    if not user_api_key:
+        await cl.Message(content="API 키가 없습니다. 페이지를 새로고침 해주세요.").send()
+        return
+
+    llm = ChatGoogleGenerativeAI(
+        model=MAIN_MODEL_NAME,
+        google_api_key=user_api_key,
+        thinking_level="high"
+    )
+
     subject = cl.user_session.get("subject")
     if not subject:
         await cl.Message(content="출제한 시험문제의 과목을 선택해주세요.", author="문제 검토 도우미").send()
@@ -793,7 +900,7 @@ async def on_message(message: cl.Message):
     try:
         await cl.Message(content=f"'{uploaded_file.name}' 파일의 검토를 시작합니다.\n\n텍스트와 이미지를 함께 처리합니다. 단, LLM의 특성상 이미지 처리가 완벽하지 않고, 글상자 속에 내용이 들어 있다면 불완전하게 추출된 채로 자료를 처리하는 기술적 한계를 감안하여 검토 의견을 읽어 주세요.\n\n답변이 나오기까지는 최대 3분 정도 걸립니다.", author="문제 검토 도우미").send()
         
-        extracted_text = await cl.make_async(convert_docx_to_text_with_images)(uploaded_file.path, media_dir)
+        extracted_text = await cl.make_async(convert_docx_to_text_with_images)(uploaded_file.path, media_dir, debug=False)
         
         if extracted_text.startswith("오류:"):
             # 변환 실패 로그 저장
@@ -811,10 +918,16 @@ async def on_message(message: cl.Message):
         system_role = PROMPTS[subject]
         
         human_contents = [{"type": "text", "text": f"시험지 본문 내용: {extracted_text}"}]
-        for b64_string in encoded_images:
+
+        for item in encoded_images:
+            # 어떤 이미지인지 LLM에게 명확히 알려줌
+            human_contents.append({
+                "type": "text",
+                "text": f"[이미지 파일명: {item['filename']}]"
+            })
             human_contents.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64_string}"}
+                "image_url": {"url": f"data:image/jpeg;base64,{item['b64']}"}
             })
         
         messages = [
@@ -828,9 +941,22 @@ async def on_message(message: cl.Message):
         full_response = []
         async with cl.Step(name="시험문제 검토 중..."):
             async for chunk in llm.astream(messages):
-                content = chunk.content
-                await msg.stream_token(content)
-                full_response.append(content)
+                if isinstance(chunk.content, list):
+                    # 리스트인 경우 텍스트만 추출
+                    content = ''.join([
+                        item.get('text', '') if isinstance(item, dict) else str(item)
+                        for item in chunk.content
+                    ])
+                elif isinstance(chunk.content, str):
+                    content = chunk.content
+                else:
+                    # 예상치 못한 타입은 문자열로 변환
+                    content = str(chunk.content)
+                
+                if content:  # 빈 문자열이 아닐 때만 처리
+                    await msg.stream_token(content)
+                    full_response.append(content)
+            
             await msg.update()
 
         # [수정됨] 정상 완료 시 로그 저장 (성공=True, 에러메시지=None)
