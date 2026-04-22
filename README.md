@@ -39,11 +39,11 @@ CREATE TABLE IF NOT EXISTS paper_review_logs (
 
 ## 실행 방법
 ```bash
-chainlit run paper_checker_chainlit_8.py --host 0.0.0.0 --port 8000
+chainlit run paper_checker.py --host 0.0.0.0 --port 8000
 ```
 
 ## 배포 웹 사이트
-http://kungmo2.mooo.com:8000
+https://acer2.snu.ac.kr/paper_checker
 
 ## 라이선스
 
@@ -51,19 +51,20 @@ http://kungmo2.mooo.com:8000
 
 # 생기부 검토 도우미
 
-고등학교 생활기록부(세특, 행특 등)의 오타와 문법 오류를 AI로 검토해주는 도구입니다.
+중학교와 고등학교 시험문제를 AI로 검토해주는 도구입니다. 이 도구는 국어, 수학, 영어, 사회, 과학 시험문제의 검토를 지원합니다.
 
 ## 주요 기능
-- Excel 파일(.xlsx) 업로드
+- 시험문제를 docx 파일로 변환하여 업로드
 - AI 기반 오타 및 문법 검토
-- 학생별 상세 피드백 제공
+- 문항별 상세 피드백 제공
 
 ## 기술 스택
-- Python 3.12+
+- Python 3.14
 - Chainlit
 - LangChain
 - Google Gemini API
-- Pandas
+- Pandoc
+- Pillow
 
 ## 라이선스
 
